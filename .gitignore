@@ -1,0 +1,6 @@
+vars.yml
+vars1.yml
+*.ini
+hosts
+hosts.yaml
+hosts.json

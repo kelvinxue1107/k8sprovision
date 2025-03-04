@@ -1,0 +1,96 @@
+---
+- name: Configure firewall for Kubernetes
+  firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+  loop:
+    - 6443/tcp    # Kubernetes API
+    - 2379-2380/tcp # etcd
+    - 10250/tcp   # Kubelet API
+    - 10259/tcp   # kube-scheduler
+    - 10257/tcp   # kube-controller-manager
+- name: Reload firewalld for Kubernetes
+  firewalld:
+    state: reloaded
+
+
+- name: Set first master
+  set_fact:
+    first_master: "{{ groups['master'][0] }}"
+
+# roles/master/tasks/main.yml
+- name: Create Kubernetes PKI directories on all masters
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+  loop:
+    - /etc/kubernetes/pki
+    - /etc/kubernetes/pki/etcd
+  when: inventory_hostname != first_master
+
+# roles/master/tasks/main.yml
+- name: Copy CA certificates from first master
+  synchronize:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: pull  # Pull files from the first master
+    recursive: yes
+    owner: yes
+    group: yes
+  delegate_to: "{{ first_master }}"  # Execute from the first master
+  loop:
+    - { src: '/etc/kubernetes/pki/ca.*', dest: '/etc/kubernetes/pki/' }
+    - { src: '/etc/kubernetes/pki/sa.*', dest: '/etc/kubernetes/pki/' }
+    - { src: '/etc/kubernetes/pki/front-proxy-ca.*', dest: '/etc/kubernetes/pki/' }
+    - { src: '/etc/kubernetes/pki/etcd/ca.*', dest: '/etc/kubernetes/pki/etcd/' }
+    - { src: '/etc/kubernetes/admin.conf', dest: '/etc/kubernetes/' }
+  when: inventory_hostname != first_master  # Skip the first master
+  run_once: yes  # Run once and apply to all other masters
+
+# roles/master/tasks/main.yml
+- name: Set permissions for Kubernetes files
+  file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: 0600
+  loop:
+    - /etc/kubernetes/pki/ca.crt
+    - /etc/kubernetes/pki/ca.key
+    - /etc/kubernetes/pki/sa.key
+    - /etc/kubernetes/pki/sa.pub
+    - /etc/kubernetes/pki/front-proxy-ca.crt
+    - /etc/kubernetes/pki/front-proxy-ca.key
+    - /etc/kubernetes/pki/etcd/ca.crt
+    - /etc/kubernetes/pki/etcd/ca.key
+    - /etc/kubernetes/admin.conf
+  when: inventory_hostname != first_master
+
+- name: Get join command
+  command: kubeadm token create --print-join-command
+  register: worker_join_cmd
+  run_once: true
+  when: inventory_hostname == first_master
+
+- name: Extract control plane join command
+  set_fact:
+    control_plane_join_command: >-
+      {{ worker_join_cmd.stdout | regex_search('kubeadm join .* --control-plane') }}
+  when: inventory_hostname == first_master
+
+- name: Share control plane join command with other masters
+  set_fact:
+    control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
+  when: inventory_hostname != first_master
+
+- name: Join other control plane nodes
+  command: "{{ control_plane_join_command }} --v=5"
+  when: inventory_hostname != first_master
+  register: join_result
+  until: join_result.rc == 0
+  retries: 3
+  delay: 10

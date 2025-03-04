@@ -1,0 +1,74 @@
+---
+- name: Configure firewall for Kubernetes
+  firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+  loop:
+    - 6443/tcp    # Kubernetes API
+    - 2379-2380/tcp # etcd
+    - 10250/tcp   # Kubelet API
+    - 10259/tcp   # kube-scheduler
+    - 10257/tcp   # kube-controller-manager
+- name: Reload firewalld for Kubernetes
+  firewalld:
+    state: reloaded
+
+- name: Set first master
+  set_fact:
+    first_master: "{{ groups['master'][0] }}"
+
+- name: Initialize cluster on first master
+  command: |
+    kubeadm init \
+      --control-plane-endpoint "{{ hostvars[first_master]['ansible_default_ipv4']['address'] }}" \
+      --pod-network-cidr=10.10.0.0/16 \
+      --upload-certs
+#      --certificate-key "{{ lookup('password', '/dev/null length=32 chars=hex') }}" \
+#      --token "{{ lookup('password', '/dev/null chars=hex,length=6') }}.{{ lookup('password', '/dev/null chars=hex,length=16') }}"
+  when: inventory_hostname == first_master
+
+- name: Copy kubeconfig to user directory
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ ansible_user_dir }}/.kube/config"
+    remote_src: yes
+    owner: "{{ ansible_user_id }}"
+    mode: 0600
+  when: inventory_hostname == first_master
+
+- name: Install Calico CNI
+  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+  when: inventory_hostname == first_master
+
+- name: Get join command
+  command: kubeadm token create --print-join-command
+  register: worker_join_cmd
+  run_once: true
+  when: inventory_hostname == first_master
+
+- name: Extract control plane join command
+  set_fact:
+    control_plane_join_command: >-
+      {{ worker_join_cmd.stdout | regex_search('kubeadm join .* --control-plane') }}
+  when: inventory_hostname == first_master
+
+- name: Share control plane join command with other masters
+  set_fact:
+    control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
+  when: inventory_hostname != first_master
+
+- name: Join other control plane nodes
+  command: "{{ control_plane_join_command }}"
+  when: inventory_hostname != first_master
+
+- name: Save worker join command
+  copy:
+    content: "{{ worker_join_cmd.stdout }}"
+    dest: /tmp/worker_join.sh
+    mode: 0755
+  when: inventory_hostname == first_master
+
+- name: Join other control plane nodes
+  command: "kubeadm join {{ hostvars[first_master]['ansible_default_ipv4']['address'] }}:6443 --token {{ token }} --discovery-token-ca-cert-hash sha256:{{ ca_cert_hash }} --control-plane --certificate-key {{ cert_key }}"
+  when: inventory_hostname != first_master

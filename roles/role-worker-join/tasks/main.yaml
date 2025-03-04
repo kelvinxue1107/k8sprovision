@@ -1,0 +1,36 @@
+---
+- name: Configure firewall for Kubernetes
+  firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+  loop:
+    - 6443/tcp    # Kubernetes API
+    - 2379-2380/tcp # etcd
+    - 10250/tcp   # Kubelet API
+    - 10259/tcp   # kube-scheduler
+    - 10257/tcp   # kube-controller-manager
+
+- name: Reload firewalld for Kubernetes
+  shell:
+    firewall-cmd --reload
+
+- name: Extract control plane join command
+  set_fact:
+    control_plane_join_command: >-
+      {{ worker_join_cmd.stdout | regex_search('kubeadm join .*') }}
+
+
+- name: Share control plane join command with other masters
+  set_fact:
+    control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
+
+
+- name: Join other control plane nodes
+  command: "{{ control_plane_join_command }} --v=5"
+  when: inventory_hostname != first_master
+  register: join_result
+  until: join_result.rc == 0
+  retries: 3
+  delay: 10    
+

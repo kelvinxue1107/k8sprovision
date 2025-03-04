@@ -1,0 +1,30 @@
+---
+- name: Configure Kubernetes Cluster on Rocky Linux 9
+  hosts: template
+  become: true
+  roles:
+    - common
+    - containerd
+    - kubernetes
+  tags: 
+    - template
+
+- name: Configure Kubernetes Master Nodes
+  hosts: master
+  become: true
+  roles:
+    - role-master-deploy
+  tags:
+    - master
+
+- name: Provision Kubernetes HA Master Nodes
+  hosts: master
+  become: true
+  roles:
+    - role-master-join
+
+- name: Configure Kubernetes Worker Nodes
+  hosts: worker
+  become: true
+  roles:
+    - role-worker-join
