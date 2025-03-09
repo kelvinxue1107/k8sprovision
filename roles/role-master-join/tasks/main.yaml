@@ -33,23 +33,43 @@
   when: inventory_hostname != first_master
 
 # roles/master/tasks/main.yml
-- name: Copy CA certificates from first master
-  synchronize:
+- name: Fetch certificates from first master
+  fetch:
     src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: pull  # Pull files from the first master
-    recursive: yes
-    owner: yes
-    group: yes
-  delegate_to: "{{ first_master }}"  # Execute from the first master
+    dest: "./tmp/k8s-certs/{{ inventory_hostname }}/{{ item.dest }}"
+    flat: yes
+  delegate_to: "{{ first_master }}"
   loop:
-    - { src: '/etc/kubernetes/pki/ca.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/sa.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.*', dest: '/etc/kubernetes/pki/etcd/' }
-    - { src: '/etc/kubernetes/admin.conf', dest: '/etc/kubernetes/' }
-  when: inventory_hostname != first_master  # Skip the first master
-  run_once: yes  # Run once and apply to all other masters
+    - { src: '/etc/kubernetes/pki/ca.crt', dest: 'ca.crt' }
+    - { src: '/etc/kubernetes/pki/ca.key', dest: 'ca.key' }
+    - { src: '/etc/kubernetes/pki/sa.key', dest: 'sa.key' }
+    - { src: '/etc/kubernetes/pki/sa.pub', dest: 'sa.pub' }
+    - { src: '/etc/kubernetes/pki/front-proxy-ca.crt', dest: 'front-proxy-ca.crt' }
+    - { src: '/etc/kubernetes/pki/front-proxy-ca.key', dest: 'front-proxy-ca.key' }
+    - { src: '/etc/kubernetes/pki/etcd/ca.crt', dest: 'etcd/ca.crt' }
+    - { src: '/etc/kubernetes/pki/etcd/ca.key', dest: 'etcd/ca.key' }
+    - { src: '/etc/kubernetes/admin.conf', dest: 'admin.conf' }
+  when: inventory_hostname != first_master
+  run_once: yes
+
+- name: Copy certificates to other masters
+  copy:
+    src: "./tmp/k8s-certs/{{ inventory_hostname }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode | default('0600') }}"
+  loop:
+    - { src: 'ca.crt', dest: '/etc/kubernetes/pki/ca.crt' }
+    - { src: 'ca.key', dest: '/etc/kubernetes/pki/ca.key' }
+    - { src: 'sa.key', dest: '/etc/kubernetes/pki/sa.key' }
+    - { src: 'sa.pub', dest: '/etc/kubernetes/pki/sa.pub' }
+    - { src: 'front-proxy-ca.crt', dest: '/etc/kubernetes/pki/front-proxy-ca.crt' }
+    - { src: 'front-proxy-ca.key', dest: '/etc/kubernetes/pki/front-proxy-ca.key' }
+    - { src: 'etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt' }
+    - { src: 'etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key' }
+    - { src: 'admin.conf', dest: '/etc/kubernetes/admin.conf', mode: '0644' }
+  when: inventory_hostname != first_master
 
 # roles/master/tasks/main.yml
 - name: Set permissions for Kubernetes files
