@@ -1,36 +1,51 @@
 ---
-- name: Configure firewall for Kubernetes
+# roles/common/tasks/main.yml
+- name: Debug worker_join_command in worker-join role
+  debug:
+    var: hostvars[groups['master'][0]].worker_join_command
+  run_once: true
+
+- name: Configure firewalld rules for Kubernetes
   firewalld:
-    port: "{{ item }}"
+    port: "{{ item.port }}"
     permanent: yes
     state: enabled
+    zone: public
   loop:
-    - 6443/tcp    # Kubernetes API
-    - 2379-2380/tcp # etcd
-    - 10250/tcp   # Kubelet API
-    - 10259/tcp   # kube-scheduler
-    - 10257/tcp   # kube-controller-manager
+    - { port: '6443/tcp' }       # Kubernetes API server
+    - { port: '10250/tcp' }      # Kubelet API
+    - { port: '30000-32767/tcp' } # NodePort services
+    - { port: '8472/udp' }       # Flannel/Calico VXLAN
+    - { port: '51820/udp' }      # Calico WireGuard
+    - { port: '179/tcp' }        # Calico BGP (optional)
+  notify: reload firewall
 
-- name: Reload firewalld for Kubernetes
-  shell:
-    firewall-cmd --reload
+- name: Reload firewalld
+  service:
+    name: firewalld
+    state: reloaded
+  when: ansible_os_family == 'RedHat'
 
-- name: Extract control plane join command
-  set_fact:
-    control_plane_join_command: >-
-      {{ worker_join_cmd.stdout | regex_search('kubeadm join .*') }}
+- name: Check if worker node has already joined the cluster
+  command: kubectl get nodes -o jsonpath='{.items[*].metadata.name}'
+  register: cluster_nodes
+#  delegate_to: "{{ first_master }}"
+  delegate_to: k8s-m01
+  run_once: true
+  changed_when: false
 
+- name: Debug cluster nodes
+  debug:
+    msg: "Nodes in the cluster: {{ cluster_nodes.stdout }}"
+  run_once: true
+  delegate_to: k8s-m01
 
-- name: Share control plane join command with other masters
-  set_fact:
-    control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
-
-
-- name: Join other control plane nodes
-  command: "{{ control_plane_join_command }} --v=5"
-  when: inventory_hostname != first_master
+- name: Join worker to cluster (if not already joined)
+  command: "{{ hostvars[groups['master'][0]].worker_join_command }}"
   register: join_result
   until: join_result.rc == 0
-  retries: 3
-  delay: 10    
-
+  retries: 5
+  delay: 10
+  when: >
+    inventory_hostname not in cluster_nodes.stdout
+  ignore_errors: yes
