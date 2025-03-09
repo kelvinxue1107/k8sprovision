@@ -13,7 +13,7 @@
   become: true
   roles:
     - role-master-deploy
-  tags: [never, master]
+  tags: [never, master-config]
 
 - name: Get master join token
   hosts: master
@@ -37,3 +37,10 @@
   roles:
     - role-worker-join
   tags: [never, worker-join]
+
+- name: Reset all the nodes
+  hosts: worker, master
+  become: yes
+  roles:
+    - role-remove-node
+  tags: [never, remove-node]
