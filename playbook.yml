@@ -6,25 +6,25 @@
     - common
     - containerd
     - kubernetes
-  tags: 
-    - template
+  tags: [never, template]
 
 - name: Configure Kubernetes Master Nodes
   hosts: master
   become: true
   roles:
     - role-master-deploy
-  tags:
-    - master
+  tags: [never, master]
 
 - name: Provision Kubernetes HA Master Nodes
   hosts: master
   become: true
   roles:
     - role-master-join
+  tags: [never, master-join]
 
 - name: Configure Kubernetes Worker Nodes
   hosts: worker
   become: true
   roles:
     - role-worker-join
+  tags: [never, worker-join]
