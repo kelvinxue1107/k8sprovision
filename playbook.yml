@@ -15,6 +15,15 @@
     - role-master-deploy
   tags: [never, master]
 
+- name: Get master join token
+  hosts: master
+  become: yes
+  roles:
+    - role: role-get-kubetoken
+      vars:
+        first_master: "{{ groups['master'][0] }}"
+  tags: [never, worker-join]
+
 - name: Provision Kubernetes HA Master Nodes
   hosts: master
   become: true
@@ -24,7 +33,7 @@
 
 - name: Configure Kubernetes Worker Nodes
   hosts: worker
-  become: true
+  become: yes
   roles:
     - role-worker-join
   tags: [never, worker-join]
