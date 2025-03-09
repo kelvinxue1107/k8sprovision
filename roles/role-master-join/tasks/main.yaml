@@ -33,43 +33,39 @@
   when: inventory_hostname != first_master
 
 # roles/master/tasks/main.yml
-- name: Fetch certificates from first master
-  fetch:
-    src: "{{ item.src }}"
-    dest: "./tmp/k8s-certs/{{ inventory_hostname }}/{{ item.dest }}"
-    flat: yes
-  delegate_to: "{{ first_master }}"
-  loop:
-    - { src: '/etc/kubernetes/pki/ca.crt', dest: 'ca.crt' }
-    - { src: '/etc/kubernetes/pki/ca.key', dest: 'ca.key' }
-    - { src: '/etc/kubernetes/pki/sa.key', dest: 'sa.key' }
-    - { src: '/etc/kubernetes/pki/sa.pub', dest: 'sa.pub' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.crt', dest: 'front-proxy-ca.crt' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.key', dest: 'front-proxy-ca.key' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.crt', dest: 'etcd/ca.crt' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.key', dest: 'etcd/ca.key' }
-    - { src: '/etc/kubernetes/admin.conf', dest: 'admin.conf' }
-  when: inventory_hostname != first_master
-  run_once: yes
-
-- name: Copy certificates to other masters
-  copy:
-    src: "./tmp/k8s-certs/{{ inventory_hostname }}/{{ item.src }}"
-    dest: "{{ item.dest }}"
+- name: Ensure PKI directories exist on other masters
+  file:
+    path: "{{ item }}"
+    state: directory
     owner: root
     group: root
-    mode: "{{ item.mode | default('0600') }}"
+    mode: 0755
   loop:
-    - { src: 'ca.crt', dest: '/etc/kubernetes/pki/ca.crt' }
-    - { src: 'ca.key', dest: '/etc/kubernetes/pki/ca.key' }
-    - { src: 'sa.key', dest: '/etc/kubernetes/pki/sa.key' }
-    - { src: 'sa.pub', dest: '/etc/kubernetes/pki/sa.pub' }
-    - { src: 'front-proxy-ca.crt', dest: '/etc/kubernetes/pki/front-proxy-ca.crt' }
-    - { src: 'front-proxy-ca.key', dest: '/etc/kubernetes/pki/front-proxy-ca.key' }
-    - { src: 'etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt' }
-    - { src: 'etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key' }
-    - { src: 'admin.conf', dest: '/etc/kubernetes/admin.conf', mode: '0644' }
+    - /etc/kubernetes/pki
+    - /etc/kubernetes/pki/etcd
   when: inventory_hostname != first_master
+  
+- name: Copy certificates from first master to other masters
+  synchronize:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: push  # Push files from first master to other masters
+    recursive: yes
+    owner: yes
+    group: yes
+  delegate_to: "{{ first_master }}"  # Execute from the first master
+  loop:
+    - { src: '/etc/kubernetes/pki/ca.crt', dest: '/etc/kubernetes/pki/ca.crt' }
+    - { src: '/etc/kubernetes/pki/ca.key', dest: '/etc/kubernetes/pki/ca.key' }
+    - { src: '/etc/kubernetes/pki/sa.key', dest: '/etc/kubernetes/pki/sa.key' }
+    - { src: '/etc/kubernetes/pki/sa.pub', dest: '/etc/kubernetes/pki/sa.pub' }
+    - { src: '/etc/kubernetes/pki/front-proxy-ca.crt', dest: '/etc/kubernetes/pki/front-proxy-ca.crt' }
+    - { src: '/etc/kubernetes/pki/front-proxy-ca.key', dest: '/etc/kubernetes/pki/front-proxy-ca.key' }
+    - { src: '/etc/kubernetes/pki/etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt' }
+    - { src: '/etc/kubernetes/pki/etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key' }
+    - { src: '/etc/kubernetes/admin.conf', dest: '/etc/kubernetes/admin.conf' }
+  when: inventory_hostname != first_master
+  run_once: yes  # Run once and apply to all other masters
 
 # roles/master/tasks/main.yml
 - name: Set permissions for Kubernetes files
