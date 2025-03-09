@@ -1,96 +1,150 @@
+# remove-k8s-nodes.yml
 ---
-- name: Configure firewall for Kubernetes
-  firewalld:
-    port: "{{ item }}"
-    permanent: yes
-    state: enabled
-  loop:
-    - 6443/tcp    # Kubernetes API
-    - 2379-2380/tcp # etcd
-    - 10250/tcp   # Kubelet API
-    - 10259/tcp   # kube-scheduler
-    - 10257/tcp   # kube-controller-manager
-- name: Reload firewalld for Kubernetes
-  firewalld:
-    state: reloaded
+- name: Remove Kubernetes master nodes
+  hosts: master
+  become: yes
+  tasks:
+    - name: Reset Kubernetes cluster configuration
+      command: kubeadm reset -f
+      ignore_errors: yes
+      register: kubeadm_reset
+      changed_when: "'successfully' in kubeadm_reset.stdout"
 
+    - name: Remove Kubernetes configuration directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - "~/.kube"
 
-- name: Set first master
-  set_fact:
-    first_master: "{{ groups['master'][0] }}"
+    - name: Remove CNI configuration
+      file:
+        path: /etc/cni/net.d
+        state: absent
 
-# roles/master/tasks/main.yml
-- name: Create Kubernetes PKI directories on all masters
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: 0755
-  loop:
-    - /etc/kubernetes/pki
-    - /etc/kubernetes/pki/etcd
-  when: inventory_hostname != first_master
+    - name: Stop and disable kubelet service
+      service:
+        name: kubelet
+        state: stopped
+        enabled: no
 
-# roles/master/tasks/main.yml
-- name: Copy CA certificates from first master
-  synchronize:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: pull  # Pull files from the first master
-    recursive: yes
-    owner: yes
-    group: yes
-  delegate_to: "{{ first_master }}"  # Execute from the first master
-  loop:
-    - { src: '/etc/kubernetes/pki/ca.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/sa.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.*', dest: '/etc/kubernetes/pki/' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.*', dest: '/etc/kubernetes/pki/etcd/' }
-    - { src: '/etc/kubernetes/admin.conf', dest: '/etc/kubernetes/' }
-  when: inventory_hostname != first_master  # Skip the first master
-  run_once: yes  # Run once and apply to all other masters
+    - name: Clean up iptables rules
+      iptables:
+        flush: yes
+      when: reset_iptables | default(false)
 
-# roles/master/tasks/main.yml
-- name: Set permissions for Kubernetes files
-  file:
-    path: "{{ item }}"
-    owner: root
-    group: root
-    mode: 0600
-  loop:
-    - /etc/kubernetes/pki/ca.crt
-    - /etc/kubernetes/pki/ca.key
-    - /etc/kubernetes/pki/sa.key
-    - /etc/kubernetes/pki/sa.pub
-    - /etc/kubernetes/pki/front-proxy-ca.crt
-    - /etc/kubernetes/pki/front-proxy-ca.key
-    - /etc/kubernetes/pki/etcd/ca.crt
-    - /etc/kubernetes/pki/etcd/ca.key
-    - /etc/kubernetes/admin.conf
-  when: inventory_hostname != first_master
+    - name: Remove Docker containers and images (if using Docker)
+      shell: |
+        docker rm -f $(docker ps -aq) || true
+        docker rmi -f $(docker images -q) || true
+      when: "'docker' in container_runtime"
 
-- name: Get join command
-  command: kubeadm token create --print-join-command
-  register: worker_join_cmd
-  run_once: true
-  when: inventory_hostname == first_master
+    - name: Remove containerd containers (if using containerd)
+      shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
+      when: "'containerd' in container_runtime"
 
-- name: Extract control plane join command
-  set_fact:
-    control_plane_join_command: >-
-      {{ worker_join_cmd.stdout | regex_search('kubeadm join .* --control-plane') }}
-  when: inventory_hostname == first_master
+    - name: Remove Kubernetes packages
+      package:
+        name:
+          - kubeadm
+          - kubectl
+          - kubelet
+          - kubernetes-cni
+        state: absent
+      when: remove_kube_packages | default(false)
 
-- name: Share control plane join command with other masters
-  set_fact:
-    control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
-  when: inventory_hostname != first_master
+    - name: Remove container runtime packages
+      package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: absent
+      when: remove_container_runtime | default(false)
 
-- name: Join other control plane nodes
-  command: "{{ control_plane_join_command }} --v=5"
-  when: inventory_hostname != first_master
-  register: join_result
-  until: join_result.rc == 0
-  retries: 3
-  delay: 10
+    - name: Clean up firewall rules
+      firewalld:
+        immediate: yes
+        permanent: yes
+        state: disabled
+        port: "{{ item }}"
+      loop: "{{ k8s_firewall_ports }}"
+      when: reset_firewall | default(false)
+  tags: [never, remove-node]
+
+- name: Remove Kubernetes worker nodes
+  hosts: worker
+  become: yes
+  tasks:
+    - name: Reset Kubernetes cluster configuration
+      command: kubeadm reset -f
+      ignore_errors: yes
+      register: kubeadm_reset
+      changed_when: "'successfully' in kubeadm_reset.stdout"
+
+    - name: Remove Kubernetes configuration directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - "~/.kube"
+
+    - name: Remove CNI configuration
+      file:
+        path: /etc/cni/net.d
+        state: absent
+
+    - name: Stop and disable kubelet service
+      service:
+        name: kubelet
+        state: stopped
+        enabled: no
+
+    - name: Clean up iptables rules
+      iptables:
+        flush: yes
+      when: reset_iptables | default(false)
+
+    - name: Remove Docker containers and images (if using Docker)
+      shell: |
+        docker rm -f $(docker ps -aq) || true
+        docker rmi -f $(docker images -q) || true
+      when: "'docker' in container_runtime"
+
+    - name: Remove containerd containers (if using containerd)
+      shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
+      when: "'containerd' in container_runtime"
+
+    - name: Remove Kubernetes packages
+      package:
+        name:
+          - kubeadm
+          - kubectl
+          - kubelet
+          - kubernetes-cni
+        state: absent
+      when: remove_kube_packages | default(false)
+
+    - name: Remove container runtime packages
+      package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: absent
+      when: remove_container_runtime | default(false)
+
+    - name: Clean up firewall rules
+      firewalld:
+        immediate: yes
+        permanent: yes
+        state: disabled
+        port: "{{ item }}"
+      loop: "{{ k8s_firewall_ports }}"
+      when: reset_firewall | default(false)
+  tags: [never, remove-node]
