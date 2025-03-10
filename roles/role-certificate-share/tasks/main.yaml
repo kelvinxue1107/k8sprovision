@@ -1,0 +1,59 @@
+---
+- name: Create PKI directories on target master
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+  loop:
+    - /etc/kubernetes/pki
+    - /etc/kubernetes/pki/etcd
+  when: inventory_hostname != first_master
+  
+- name: Synchronize certificate files
+  delay: 5
+  synchronize:
+    src: "{{ item }}"
+    dest: "{{ item }}"
+    mode: push
+    recursive: yes
+    owner: yes
+    group: yes
+  delegate_to: "{{ groups['master'][0] }}"
+  with_items:
+    - /etc/kubernetes/pki/ca.crt
+    - /etc/kubernetes/pki/ca.key
+    - /etc/kubernetes/pki/sa.pub
+    - /etc/kubernetes/pki/sa.key
+    - /etc/kubernetes/pki/front-proxy-ca.crt
+    - /etc/kubernetes/pki/front-proxy-ca.key
+    - /etc/kubernetes/pki/etcd/ca.crt
+    - /etc/kubernetes/pki/etcd/ca.key
+#    loop:
+#      - { src: '/etc/kubernetes/pki/ca.crt', dest: '/etc/kubernetes/pki/ca.crt' }
+#      - { src: '/etc/kubernetes/pki/ca.key', dest: '/etc/kubernetes/pki/ca.key' }
+#      - { src: '/etc/kubernetes/pki/sa.pub', dest: '/etc/kubernetes/pki/sa.pub' }
+#      - { src: '/etc/kubernetes/pki/sa.key', dest: '/etc/kubernetes/pki/sa.key' }
+#      - { src: '/etc/kubernetes/pki/front-proxy-ca.crt', dest: '/etc/kubernetes/pki/front-proxy-ca.crt' }
+#      - { src: '/etc/kubernetes/pki/front-proxy-ca.key', dest: '/etc/kubernetes/pki/front-proxy-ca.key' }
+#      - { src: '/etc/kubernetes/pki/etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt' }
+#      - { src: '/etc/kubernetes/pki/etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key' }
+# vars:
+#    ansible_ssh_host: "{{ hostvars[inventory_hostname]['ansible_host'] }}"
+#    ansible_ssh_user: root
+  register: rsync_result
+
+#- name: Set strict permissions on certificates
+#  file:
+#    path: "{{ item }}"
+#    owner: root
+#    group: root
+#    mode: "{{ item.mode }}"
+#  loop:
+#    - { path: '/etc/kubernetes/pki/ca.key', mode: '0600' }
+#    - { path: '/etc/kubernetes/pki/sa.key', mode: '0600' }
+#    - { path: '/etc/kubernetes/pki/front-proxy-ca.key', mode: '0600' }
+#    - { path: '/etc/kubernetes/pki/etcd/ca.key', mode: '0600' }
+#    - { path: '/etc/kubernetes/admin.conf', mode: '0644' }
+#  when: inventory_hostname != first_master  
