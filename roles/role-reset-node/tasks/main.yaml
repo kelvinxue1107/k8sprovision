@@ -1,0 +1,27 @@
+# reset-k8s-nodes.yml
+---
+- name: Reset Kubernetes master nodes
+  hosts: "{{ target_hosts }}"
+  become: yes
+  vars_prompt:
+    - name: target_hosts
+      prompt: |
+        Enter the host groups to remove (e.g., masters, workers, or all):
+      private: no
+  tasks:
+    - name: Reset Kubernetes cluster configuration
+      command: kubeadm reset -f
+      ignore_errors: yes
+      register: kubeadm_reset
+      changed_when: "'successfully' in kubeadm_reset.stdout"
+
+    - name: Remove Kubernetes configuration directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - "~/.kube"
+  tags: [never, reset-node]
