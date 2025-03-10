@@ -2,111 +2,47 @@
 - name: Set first master
   set_fact:
     first_master: "{{ groups['master'][0] }}"
-
-- name: Configure firewall for Kubernetes
-  firewalld:
-    port: "{{ item }}"
-    permanent: yes
-    state: enabled
-  loop:
-    - 6443/tcp    # Kubernetes API
-    - 2379-2380/tcp # etcd
-    - 10250/tcp   # Kubelet API
-    - 10259/tcp   # kube-scheduler
-    - 10257/tcp   # kube-controller-manager
-- name: Reload firewalld for Kubernetes
-  shell:
-    firewall-cmd --reload
-  when: inventory_hostname != first_master
-
-# roles/master/tasks/main.yml
-- name: Create Kubernetes PKI directories on all masters
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: 0755
-  loop:
-    - /etc/kubernetes/pki
-    - /etc/kubernetes/pki/etcd
-  when: inventory_hostname != first_master
-
-# roles/master/tasks/main.yml
-- name: Ensure PKI directories exist on other masters
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: 0755
-  loop:
-    - /etc/kubernetes/pki
-    - /etc/kubernetes/pki/etcd
-  when: inventory_hostname != first_master
-  
-- name: Copy certificates from first master to other masters
-  synchronize:
-    src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
-    mode: push  # Push files from first master to other masters
-    recursive: yes
-    owner: yes
-    group: yes
-  delegate_to: "{{ first_master }}"  # Execute from the first master
-  loop:
-    - { src: '/etc/kubernetes/pki/ca.crt', dest: '/etc/kubernetes/pki/ca.crt' }
-    - { src: '/etc/kubernetes/pki/ca.key', dest: '/etc/kubernetes/pki/ca.key' }
-    - { src: '/etc/kubernetes/pki/sa.key', dest: '/etc/kubernetes/pki/sa.key' }
-    - { src: '/etc/kubernetes/pki/sa.pub', dest: '/etc/kubernetes/pki/sa.pub' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.crt', dest: '/etc/kubernetes/pki/front-proxy-ca.crt' }
-    - { src: '/etc/kubernetes/pki/front-proxy-ca.key', dest: '/etc/kubernetes/pki/front-proxy-ca.key' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt' }
-    - { src: '/etc/kubernetes/pki/etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key' }
-    - { src: '/etc/kubernetes/admin.conf', dest: '/etc/kubernetes/admin.conf' }
-  when: inventory_hostname != first_master
-  run_once: yes  # Run once and apply to all other masters
-
-# roles/master/tasks/main.yml
-- name: Set permissions for Kubernetes files
-  file:
-    path: "{{ item }}"
-    owner: root
-    group: root
-    mode: 0600
-  loop:
-    - /etc/kubernetes/pki/ca.crt
-    - /etc/kubernetes/pki/ca.key
-    - /etc/kubernetes/pki/sa.key
-    - /etc/kubernetes/pki/sa.pub
-    - /etc/kubernetes/pki/front-proxy-ca.crt
-    - /etc/kubernetes/pki/front-proxy-ca.key
-    - /etc/kubernetes/pki/etcd/ca.crt
-    - /etc/kubernetes/pki/etcd/ca.key
-    - /etc/kubernetes/admin.conf
-  when: inventory_hostname != first_master
-
 - name: Get join command
   command: kubeadm token create --print-join-command
   register: worker_join_cmd
   run_once: true
   when: inventory_hostname == first_master
 
+- name: Debug master_join_command in master-join role
+  debug:
+    var: hostvars[groups['master'][0]].worker_join_cmd
+  run_once: true
+
 - name: Extract control plane join command
   set_fact:
     control_plane_join_command: >-
-      {{ worker_join_cmd.stdout | regex_search('kubeadm join .* --control-plane') }}
+      {{ worker_join_cmd.stdout }}{{ "--control-plane" }}
   when: inventory_hostname == first_master
 
-- name: Share control plane join command with other masters
+- name: Debug master_join_command in worker-join role
+  debug:
+    var: hostvars[groups['master'][0]].control_plane_join_command
+  run_once: true
+
+- name: Check existing cluster nodes
+  command: kubectl get nodes -o jsonpath='{.items[*].metadata.name}'
+  register: existing_nodes
+  delegate_to: "{{ groups['master'][0] }}"
+  run_once: yes
+  changed_when: false
+
+- name: Share control plane join command with other master
   set_fact:
     control_plane_join_command: "{{ hostvars[first_master]['control_plane_join_command'] }}"
   when: inventory_hostname != first_master
 
 - name: Join other control plane nodes
-  command: "{{ control_plane_join_command }} --v=5"
-  when: inventory_hostname != first_master
+  command: "{{ control_plane_join_command }}"
   register: join_result
   until: join_result.rc == 0
   retries: 3
   delay: 10
+  when: 
+    - inventory_hostname != groups['master'][0]
+#    - inventory_hostname not in existing_nodes.stdout.split()
+  ignore_errors: yes
