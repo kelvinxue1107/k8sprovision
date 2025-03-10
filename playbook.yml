@@ -8,12 +8,51 @@
     - kubernetes
   tags: [never, template]
 
+- name: reload firewall on master
+  hosts: master
+  tasks:  
+    - name: add firewall port
+      firewalld:
+        port: "{{ item }}"
+        permanent: yes
+        state: enabled
+      loop:
+        - 6443/tcp    # Kubernetes API
+        - 2379-2380/tcp # etcd
+        - 10250/tcp   # Kubelet API
+        - 10259/tcp   # kube-scheduler
+        - 10257/tcp   # kube-controller-manager
+    - name: Reload firewalld for Kubernetes
+      shell:
+        firewall-cmd --reload
+
 - name: Configure Kubernetes Master Nodes
   hosts: master
   become: true
   roles:
     - role-master-deploy
   tags: [never, master-config]
+
+- name: reset Kubernetes Master Nodes
+  hosts: "{{ target_hosts }}"
+  become: yes
+  vars_prompt:
+    - name: target_hosts
+      prompt: |
+        Enter the host groups to remove (e.g., masters, workers, or all):
+      private: no
+  roles:
+    - role-reset-node
+  tags: [never, reset-node]
+
+- name: share certificate
+  hosts: k8s-m02, k8s-m03
+  become: yes
+  roles:
+    - role: role-certificate-share
+      vars:
+        first_master: "{{ groups['master'][0] }}"
+  tags: [never, cert-share]
 
 - name: Get master join token
   hosts: master
