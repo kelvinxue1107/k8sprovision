@@ -1,150 +1,131 @@
 # remove-k8s-nodes.yml
 ---
-- name: Remove Kubernetes master nodes
-  hosts: master
-  become: yes
-  tasks:
-    - name: Reset Kubernetes cluster configuration
-      command: kubeadm reset -f
-      ignore_errors: yes
-      register: kubeadm_reset
-      changed_when: "'successfully' in kubeadm_reset.stdout"
+- name: Reset Kubernetes cluster configuration
+  command: kubeadm reset -f
+  ignore_errors: yes
+  register: kubeadm_reset
+  changed_when: "'successfully' in kubeadm_reset.stdout"
+- name: Remove Kubernetes configuration directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/kubernetes
+    - /var/lib/kubelet
+    - /var/lib/etcd
+    - "~/.kube"
+- name: Remove CNI configuration
+  file:
+    path: /etc/cni/net.d
+    state: absent
+- name: Stop and disable kubelet service
+  service:
+    name: kubelet
+    state: stopped
+    enabled: no
+- name: Clean up iptables rules
+  iptables:
+    flush: yes
+  when: reset_iptables | default(false)
+- name: Remove Docker containers and images (if using Docker)
+  shell: |
+    docker rm -f $(docker ps -aq) || true
+    docker rmi -f $(docker images -q) || true
+  when: "'docker' in container_runtime"
+- name: Remove containerd containers (if using containerd)
+  shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
+  when: "'containerd' in container_runtime"
+- name: Remove Kubernetes packages
+  package:
+    name:
+      - kubeadm
+      - kubectl
+      - kubelet
+      - kubernetes-cni
+    state: absent
+  when: remove_kube_packages | default(false)
+- name: Remove container runtime packages
+  package:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: absent
+  when: remove_container_runtime | default(false)
+- name: Clean up firewall rules
+  firewalld:
+    immediate: yes
+    permanent: yes
+    state: disabled
+    port: "{{ item }}"
+  loop: "{{ k8s_firewall_ports }}"
+  when: reset_firewall | default(false)
 
-    - name: Remove Kubernetes configuration directories
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/kubernetes
-        - /var/lib/kubelet
-        - /var/lib/etcd
-        - "~/.kube"
+- name: Reset Kubernetes cluster configuration
+  command: kubeadm reset -f
+  ignore_errors: yes
+  register: kubeadm_reset
+  changed_when: "'successfully' in kubeadm_reset.stdout"
 
-    - name: Remove CNI configuration
-      file:
-        path: /etc/cni/net.d
-        state: absent
+- name: Remove Kubernetes configuration directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/kubernetes
+    - /var/lib/kubelet
+    - "~/.kube"
 
-    - name: Stop and disable kubelet service
-      service:
-        name: kubelet
-        state: stopped
-        enabled: no
+- name: Remove CNI configuration
+  file:
+    path: /etc/cni/net.d
+    state: absent
 
-    - name: Clean up iptables rules
-      iptables:
-        flush: yes
-      when: reset_iptables | default(false)
+- name: Stop and disable kubelet service
+  service:
+    name: kubelet
+    state: stopped
+    enabled: no
 
-    - name: Remove Docker containers and images (if using Docker)
-      shell: |
-        docker rm -f $(docker ps -aq) || true
-        docker rmi -f $(docker images -q) || true
-      when: "'docker' in container_runtime"
+- name: Clean up iptables rules
+  iptables:
+    flush: yes
+  when: reset_iptables | default(false)
 
-    - name: Remove containerd containers (if using containerd)
-      shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
-      when: "'containerd' in container_runtime"
+- name: Remove Docker containers and images (if using Docker)
+  shell: |
+    docker rm -f $(docker ps -aq) || true
+    docker rmi -f $(docker images -q) || true
+  when: "'docker' in container_runtime"
 
-    - name: Remove Kubernetes packages
-      package:
-        name:
-          - kubeadm
-          - kubectl
-          - kubelet
-          - kubernetes-cni
-        state: absent
-      when: remove_kube_packages | default(false)
+- name: Remove containerd containers (if using containerd)
+  shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
+  when: "'containerd' in container_runtime"
 
-    - name: Remove container runtime packages
-      package:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-        state: absent
-      when: remove_container_runtime | default(false)
+- name: Remove Kubernetes packages
+  package:
+    name:
+      - kubeadm
+      - kubectl
+      - kubelet
+      - kubernetes-cni
+    state: absent
+  when: remove_kube_packages | default(false)
 
-    - name: Clean up firewall rules
-      firewalld:
-        immediate: yes
-        permanent: yes
-        state: disabled
-        port: "{{ item }}"
-      loop: "{{ k8s_firewall_ports }}"
-      when: reset_firewall | default(false)
-  tags: [never, remove-node]
+- name: Remove container runtime packages
+  package:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: absent
+  when: remove_container_runtime | default(false)
 
-- name: Remove Kubernetes worker nodes
-  hosts: worker
-  become: yes
-  tasks:
-    - name: Reset Kubernetes cluster configuration
-      command: kubeadm reset -f
-      ignore_errors: yes
-      register: kubeadm_reset
-      changed_when: "'successfully' in kubeadm_reset.stdout"
-
-    - name: Remove Kubernetes configuration directories
-      file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/kubernetes
-        - /var/lib/kubelet
-        - "~/.kube"
-
-    - name: Remove CNI configuration
-      file:
-        path: /etc/cni/net.d
-        state: absent
-
-    - name: Stop and disable kubelet service
-      service:
-        name: kubelet
-        state: stopped
-        enabled: no
-
-    - name: Clean up iptables rules
-      iptables:
-        flush: yes
-      when: reset_iptables | default(false)
-
-    - name: Remove Docker containers and images (if using Docker)
-      shell: |
-        docker rm -f $(docker ps -aq) || true
-        docker rmi -f $(docker images -q) || true
-      when: "'docker' in container_runtime"
-
-    - name: Remove containerd containers (if using containerd)
-      shell: ctr -n k8s.io containers rm $(ctr -n k8s.io containers list -q) || true
-      when: "'containerd' in container_runtime"
-
-    - name: Remove Kubernetes packages
-      package:
-        name:
-          - kubeadm
-          - kubectl
-          - kubelet
-          - kubernetes-cni
-        state: absent
-      when: remove_kube_packages | default(false)
-
-    - name: Remove container runtime packages
-      package:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-        state: absent
-      when: remove_container_runtime | default(false)
-
-    - name: Clean up firewall rules
-      firewalld:
-        immediate: yes
-        permanent: yes
-        state: disabled
-        port: "{{ item }}"
-      loop: "{{ k8s_firewall_ports }}"
-      when: reset_firewall | default(false)
-  tags: [never, remove-node]
+- name: Clean up firewall rules
+  firewalld:
+    immediate: yes
+    permanent: yes
+    state: disabled
+    port: "{{ item }}"
+  loop: "{{ k8s_firewall_ports }}"
+  when: reset_firewall | default(false)
