@@ -70,8 +70,8 @@
     - 10259/tcp   # kube-scheduler
     - 10257/tcp   # kube-controller-manager
 - name: Reload firewalld for Kubernetes
-  firewalld:
-    state: reloaded
+  shell:
+    firewall-cmd --reload
 
 - name: Apply sysctl settings
   command: sysctl --system
