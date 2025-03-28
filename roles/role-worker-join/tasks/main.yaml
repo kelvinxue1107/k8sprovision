@@ -1,5 +1,9 @@
 ---
 # roles/common/tasks/main.yml
+- name: Set first master
+  set_fact:
+    first_master: "{{ groups['master'][0] }}"
+
 - name: Debug worker_join_command in worker-join role
   debug:
     var: hostvars[groups['master'][0]].worker_join_command
@@ -18,7 +22,7 @@
     - { port: '8472/udp' }       # Flannel/Calico VXLAN
     - { port: '51820/udp' }      # Calico WireGuard
     - { port: '179/tcp' }        # Calico BGP (optional)
-  notify: reload firewall
+
 
 - name: Reload firewalld
   service:
