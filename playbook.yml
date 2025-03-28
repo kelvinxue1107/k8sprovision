@@ -1,6 +1,6 @@
 ---
 - name: Configure Kubernetes Cluster on Rocky Linux 9
-  hosts: template
+  hosts: '{{ target }}'
   become: true
   roles:
     - common
@@ -25,7 +25,8 @@
     - name: Reload firewalld for Kubernetes
       shell:
         firewall-cmd --reload
-
+  tags: [never, master-config]
+  
 - name: Configure Kubernetes Master Nodes
   hosts: master
   become: true
