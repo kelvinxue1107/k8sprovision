@@ -1,12 +1,12 @@
 ---
-- name: Configure Kubernetes Cluster on Rocky Linux 9
-  hosts: '{{ target }}'
-  become: true
-  roles:
-    - common
-    - containerd
-    - kubernetes
-  tags: [never, template]
+#- name: Configure Kubernetes Cluster on Rocky Linux 9
+#  hosts: "{{ target }}"
+#  become: true
+#  roles:
+#    - common
+#    - containerd
+#    - kubernetes
+#  tags: [never]
 
 - name: reload firewall on master
   hosts: master
@@ -95,3 +95,29 @@
   roles:
     - role-remove-node
   tags: [never, remove-node]
+
+- name: Deploy Monitoring Stack with Separate Namespaces
+  hosts: localhost
+  become: false
+  roles:
+    - role-calico-crd
+  tags: [never, calico]
+
+- name: Deploy Monitoring Stack with Separate Namespaces
+  hosts: localhost
+  become: false
+  roles:
+    - role-monitor-deploy
+  vars:
+    prometheus_namespace: prometheus
+    grafana_namespace: grafana
+    istio_namespace: istio-system
+    storage_class: "standard"  # Update with your storage class
+    helm_release_name: kube-prometheus-stack
+    grafana_dashboards:
+      - "3119"  # Kubernetes
+      - "7630"  # Istio Mesh
+      - "7636"  # Istio Service
+      - "7639"  # Istio Workload
+      - "13863" # Calico
+  tags: [never, monitoring]

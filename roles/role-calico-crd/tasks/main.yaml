@@ -1,0 +1,32 @@
+- name: Clean existing installation (if any)
+  community.kubernetes.k8s:
+    state: absent
+    src: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
+  ignore_errors: yes
+
+- name: Create Tigera Operator namespace
+  community.kubernetes.k8s:
+    api_version: v1
+    kind: Namespace
+    name: tigera-operator
+    state: present
+
+- name: Install Tigera Operator
+  community.kubernetes.k8s:
+    state: present
+    src: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
+
+- name: Wait for CRD registration
+  community.kubernetes.k8s_info:
+    api_version: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    name: installations.operator.tigera.io
+  register: crd_status
+  until: crd_status.resources[0].status.conditions | selectattr("type", "equalto", "Established") | first.status == "True"
+  retries: 10
+  delay: 5
+
+- name: Apply Calico configuration
+  community.kubernetes.k8s:
+    state: present
+    src: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml

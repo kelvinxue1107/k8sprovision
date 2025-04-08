@@ -1,0 +1,210 @@
+---
+- name: Create namespaces
+  community.kubernetes.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "{{ prometheus_namespace }}"
+    - "{{ grafana_namespace }}"
+- name: Add required Helm repositories
+  community.kubernetes.helm_repository:
+    name: "{{ item.name }}"
+    repo_url: "{{ item.url }}"
+  loop:
+    - { name: 'prometheus-community', url: 'https://prometheus-community.github.io/helm-charts' }
+    - { name: 'grafana', url: 'https://grafana.github.io/helm-charts' }
+- name: Install kube-prometheus-stack with separated components
+  community.kubernetes.helm:
+    name: "{{ helm_release_name }}"
+    chart_ref: prometheus-community/kube-prometheus-stack
+    namespace: "{{ prometheus_namespace }}"
+    create_namespace: false
+    values:
+      prometheus:
+        prometheusSpec:
+          serviceMonitorSelectorNilUsesHelmValues: false
+          podMonitorSelectorNilUsesHelmValues: false
+          serviceMonitorNamespaceSelector:
+            any: true
+          podMonitorNamespaceSelector:
+            any: true
+      grafana:
+        namespace: "{{ grafana_namespace }}"
+        adminPassword: "prom-operator"
+        service:
+          type: ClusterIP
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+            - name: Prometheus
+              type: prometheus
+              url: http://{{ helm_release_name }}-prometheus.{{ prometheus_namespace }}.svc.cluster.local:9090
+              access: proxy
+              isDefault: true
+        persistence:
+          enabled: false  # Will enable later if storage_class is set
+- name: Wait for Grafana deployment
+  community.kubernetes.k8s_info:
+    kind: Deployment
+    name: "{{ helm_release_name }}-grafana"
+    namespace: "{{ grafana_namespace }}"
+  register: grafana_deployment
+  until: grafana_deployment.resources[0].status.readyReplicas is defined and grafana_deployment.resources[0].status.readyReplicas >= 1
+  retries: 10
+  delay: 30
+  
+- name: Ensure Calico CRDs exist
+  community.kubernetes.k8s:
+    state: present
+    src: https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml
+
+- name: Configure Calico metrics
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: crd.projectcalico.org/v1
+      kind: FelixConfiguration
+      metadata:
+        name: default
+      spec:
+        prometheusMetricsEnabled: true
+        prometheusMetricsPort: 9091
+- name: Create Calico ServiceMonitor in Prometheus namespace
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: calico-monitor
+        namespace: "{{ prometheus_namespace }}"
+        labels:
+          release: "{{ helm_release_name }}"
+      spec:
+        selector:
+          matchLabels:
+            k8s-app: calico-node
+        namespaceSelector:
+          any: true
+        endpoints:
+        - port: calico-metrics-port
+          interval: 10s
+- name: Configure Istio ServiceMonitors in Prometheus namespace
+  block:
+    - name: Istio Control Plane ServiceMonitor
+      community.kubernetes.k8s:
+        definition:
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: istio-monitor-control-plane
+            namespace: "{{ prometheus_namespace }}"
+            labels:
+              release: "{{ helm_release_name }}"
+          spec:
+            selector:
+              matchLabels:
+                istio: pilot
+            namespaceSelector:
+              matchNames:
+              - "{{ istio_namespace }}"
+            endpoints:
+            - port: http-monitoring
+              interval: 15s
+    - name: Istio Data Plane ServiceMonitor
+      community.kubernetes.k8s:
+        definition:
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: istio-monitor-data-plane
+            namespace: "{{ prometheus_namespace }}"
+            labels:
+              release: "{{ helm_release_name }}"
+          spec:
+            selector:
+              matchExpressions:
+              - {key: istio-prometheus-ignore, operator: DoesNotExist}
+            namespaceSelector:
+              any: true
+            jobLabel: envoy-stats
+            endpoints:
+            - path: /stats/prometheus
+              targetPort: 15090
+              interval: 15s
+              params:
+                format:
+                - "prometheus"
+  when: istio_namespace is defined
+- name: Import Grafana dashboards
+  uri:
+    url: "http://{{ helm_release_name }}-grafana.{{ grafana_namespace }}.svc.cluster.local/api/dashboards/import"
+    method: POST
+    body_format: json
+    body:
+      dashboard:
+        id: "{{ item }}"
+      overwrite: true
+    status_code: 200
+    headers:
+      Content-Type: "application/json"
+      Accept: "application/json"
+    url_username: admin
+    url_password: "prom-operator"
+  loop: "{{ grafana_dashboards }}"
+  register: import_result
+  until: import_result.status == 200
+  retries: 5
+  delay: 10
+  ignore_errors: yes
+- name: Configure persistent storage (optional)
+  block:
+    - name: Create custom values file
+      copy:
+        dest: "/tmp/prometheus-grafana-values.yaml"
+        content: |
+          prometheus:
+            prometheusSpec:
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: {{ storage_class }}
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 50Gi
+          grafana:
+            persistence:
+              enabled: true
+              storageClassName: {{ storage_class }}
+              accessModes: ["ReadWriteOnce"]
+              size: 10Gi
+    - name: Upgrade Helm release with persistence
+      community.kubernetes.helm:
+        name: "{{ helm_release_name }}"
+        chart_ref: prometheus-community/kube-prometheus-stack
+        namespace: "{{ prometheus_namespace }}"
+        values_files:
+          - "/tmp/prometheus-grafana-values.yaml"
+  when: storage_class != ""
+- name: Expose Grafana through Istio (optional)
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: networking.istio.io/v1alpha3
+      kind: VirtualService
+      metadata:
+        name: grafana
+        namespace: "{{ grafana_namespace }}"
+      spec:
+        hosts:
+        - "grafana.example.com"  # Update with your domain
+        gateways:
+        - "<your-gateway>"       # Update with your Istio gateway
+        http:
+        - route:
+          - destination:
+              host: "{{ helm_release_name }}-grafana.{{ grafana_namespace }}.svc.cluster.local"
+              port:
+                number: 80
+  when: istio_namespace is defined
