@@ -1,0 +1,59 @@
+---
+- name: Stop firewall-cmd
+  shell: |
+    systemctl stop firewalld
+  when: ansible_service_mgr == "systemd"
+- name: Find interface with 192.168.1.x IP
+  shell: |
+    ip -o -4 addr show | awk '/inet / {print $2, $4}' | grep "{{ target_subnet }}" | cut -d' ' -f1
+  register: k8s_interface
+  changed_when: false
+- name: Get NetworkManager connection name
+  shell: |
+    nmcli -t -f DEVICE,CONNECTION dev | grep "^{{ k8s_interface.stdout }}:" | cut -d: -f2
+  register: nm_connection
+  changed_when: false
+- name: Validate network interface
+  fail:
+    msg: "Could not find interface with {{ target_subnet }}* IP"
+  when: k8s_interface.stdout == ""
+- name: Get current DNS settings
+  block:
+    - name: Get current nameservers
+      shell: |
+        nmcli -g ipv4.dns con show "{{ nm_connection.stdout }}"
+      register: current_dns
+      changed_when: false
+    - name: Get current search domains
+      shell: |
+        nmcli -g ipv4.dns-search con show "{{ nm_connection.stdout }}"
+      register: current_search
+      changed_when: false
+  when: nm_connection.stdout != ""
+- name: Prepare new DNS settings
+  block:
+    - name: Combine nameservers
+      set_fact:
+        final_nameservers: "{{ (current_dns.stdout.split(',') + [new_nameserver]) | unique }}"
+    - name: Process search domains
+      set_fact:
+        final_search: "{{ new_search_domains.split(';') | map('trim') | select('ne','') | list }}"
+  when: nm_connection.stdout != ""
+- name: Apply DNS settings
+  block:
+    - name: Update DNS configuration
+      shell: |
+        nmcli con mod "{{ nm_connection.stdout }}" \
+          ipv4.dns "{{ final_nameservers | join(',') }}" \
+          ipv4.dns-search "{{ final_search | join(' ') }}" && \
+        nmcli con down "{{ nm_connection.stdout }}" && \
+        nmcli con up "{{ nm_connection.stdout }}"
+      args:
+        executable: /bin/bash
+      register: nm_update
+      changed_when: "'successfully activated' in nm_update.stdout"
+#    - name: Flush DNS cache
+#      ansible.builtin.command: systemctl restart systemd-resolved
+#      when: ansible_service_mgr == "systemd"
+  when: nm_connection.stdout != ""
+

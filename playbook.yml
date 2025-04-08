@@ -78,6 +78,17 @@
     - role-worker-join
   tags: [never, worker-join]
 
+- name: Configure DNS on Rocky Linux 9
+  hosts: all
+  become: true
+  vars:
+    target_subnet: "192.168.1."
+    new_nameserver: "10.96.0.10"
+    new_search_domains: "default.svc.cluster.local;svc.cluster.local;cluster.local;lan"
+  roles:
+    - role-dns-update
+  tags: [never, dns]
+
 - name: Reset all the nodes
   hosts: worker, master
   become: yes
