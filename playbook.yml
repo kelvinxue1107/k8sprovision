@@ -121,3 +121,29 @@
       - "7639"  # Istio Workload
       - "13863" # Calico
   tags: [never, monitoring]
+
+- name: Deploy metallb 
+  hosts: localhost
+  become: false
+  roles:
+    - role-metallb-deploy
+  vars:
+    metallb_version: "0.14.9"
+  tags: [never, metallb]
+
+- name: Create /data directory on all worker nodes
+  hosts: worker  # Target worker nodes (change to "masters" if needed)
+  become: yes     # Run tasks with sudo
+  roles:
+    - role-pvc-mgmt
+  vars:
+    data_dir: "/data"
+    dir_mode: "0777"  # Set permissions (adjust as needed)
+    dir_owner: "root"
+    dir_group: "root"
+    storage_size: 10Gi
+    storage_class_name: hostpath-sc
+    hostpath_directory: /data
+    persistent_volume_reclaim_policy: Retain
+    worker_nodes: "{{ groups['worker'] }}"
+  tags: [never, worker-pvc]
