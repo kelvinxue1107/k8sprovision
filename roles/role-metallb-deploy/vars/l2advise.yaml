@@ -1,0 +1,9 @@
+# metallb-advertisement.yaml
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: on-prem-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - on-prem-pool

@@ -1,0 +1,21 @@
+# deploy metallb by kubectl apply 
+- name: Deploy MetalLB
+  command: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v{{ metallb_version }}/manifests/namespace.yaml
+  register: metallb_namespace
+  until: metallb_namespace is not failed
+  retries: 5
+  delay: 5
+
+# deploy metallb by Helm
+- name: Update Helm repositories
+  community.kubernetes.helm_repository:
+    name: metallb
+    repo_url: https://metallb.github.io/metallb
+    update: true
+  register: metallb_update
+  until: metallb_update is not failed
+  retries: 5
+  delay: 5
+- name: Install MetalLB
+  ansible.builtin.command:
+    cmd: helm install metallb metallb/metallb --namespace metallb-system --create-namespace
