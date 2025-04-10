@@ -1,0 +1,9 @@
+apiVersion: projectcalico.org/v3
+kind: IPPool
+metadata:
+  name: default-ipv4-ippool
+spec:
+  cidr: 10.10.0.0/16 # Must match your cluster's pod CIDR
+  ipipMode: Always # Or "CrossSubnet" if needed
+  natOutgoing: true
+  disabled: false # Ensure pool is enabled
