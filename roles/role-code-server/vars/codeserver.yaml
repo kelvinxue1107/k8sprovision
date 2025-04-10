@@ -1,0 +1,31 @@
+# code-server-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-server
+  namespace: code-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: code-server
+  template:
+    metadata:
+      labels:
+        app: code-server
+    spec:
+      containers:
+      - name: code-server
+        image: codercom/code-server:latest # Use a specific version tag if needed
+        env:
+        - name: PASSWORD
+          value: "your-password-here" # Set a secure password
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: code-server-storage
+          mountPath: /home/coder/project # Default workspace directory
+      volumes:
+      - name: code-server-storage
+        persistentVolumeClaim:
+          claimName: code-server-pvc

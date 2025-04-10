@@ -1,0 +1,14 @@
+# code-server-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-server
+  namespace: code-server
+spec:
+  type: LoadBalancer
+  selector:
+    app: code-server
+  ports:
+  - port: 80 # External port (HTTP)
+    targetPort: 8080 # code-server's default port
+  # Optional: Use port 443 for HTTPS (requires TLS setup)
