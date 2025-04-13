@@ -5,10 +5,13 @@ metadata:
   name: code-server-pvc
   namespace: code-server
 spec:
+  storageClassName: hostpath-sc
   accessModes:
   - ReadWriteOnce
   resources:
     requests:
-      storage: 8Gi # Modify this based on your needs
+      storage: 10Gi # Modify this based on your needs
   # Specify a StorageClass if available in your cluster (e.g., "nfs", "rook-ceph")
   # storageClassName: "<YOUR_STORAGE_CLASS>"
+  # If using hostPath, you can specify the path here
+  # hostPath: "/data/code-server" # Modify this based on your host path

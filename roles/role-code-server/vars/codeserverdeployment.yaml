@@ -1,0 +1,31 @@
+# code-server-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-server
+  namespace: code-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: code-server
+  template:
+    metadata:
+      labels:
+        app: code-server
+    spec:
+      containers:
+      - name: code-server
+        image: codercom/code-server:latest
+        env:
+        - name: PASSWORD
+          value: "YourPassWord"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: code-server-storage
+          mountPath: /home/coder/project # Mount the PVC here
+      volumes:
+      - name: code-server-storage
+        persistentVolumeClaim:
+          claimName: code-server-pvc # Reference the PVC

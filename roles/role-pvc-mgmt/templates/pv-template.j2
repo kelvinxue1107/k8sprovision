@@ -1,0 +1,25 @@
+# PersistentVolumes for worker nodes
+{% for worker in worker_nodes %}
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hostpath-pv-{{ worker }}
+spec:
+  capacity:
+    storage: {{ storage_size }}
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ storage_class_name }}
+  persistentVolumeReclaimPolicy: {{ persistent_volume_reclaim_policy }}
+  local:
+    path: {{ hostpath_directory }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - {{ worker }}
+{% endfor %}
