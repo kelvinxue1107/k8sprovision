@@ -1,0 +1,33 @@
+---
+- name: Create /data directory
+  ansible.builtin.file:
+    path: "{{ data_dir }}"
+    state: directory
+    mode: "{{ dir_mode }}"
+    owner: "{{ dir_owner }}"
+    group: "{{ dir_group }}"
+  register: dir_created
+
+- name: Ensure local output directory exists
+  ansible.builtin.file:
+    path: "{{ playbook_dir }}/generated-manifests"
+    state: directory
+  delegate_to: localhost
+  become: no
+
+- name: Generate PV manifests for each worker node
+  ansible.builtin.template:
+    src: pv-template.j2
+    dest: "{{ playbook_dir }}/generated-manifests/hostpath-pvs.yaml"
+  delegate_to: localhost
+  become: no
+
+- name: Apply PV manifests (skip existing)
+  ansible.builtin.shell: |
+    kubectl create -f {{ playbook_dir }}/generated-manifests/hostpath-pvs.yaml --dry-run=client -o yaml | kubectl apply -f -
+  delegate_to: localhost
+  become: no
+  args:
+    executable: /bin/bash
+  register: apply_result
+  changed_when: "'created' in apply_result.stdout"
