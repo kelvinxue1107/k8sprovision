@@ -9,26 +9,26 @@
     var: hostvars[groups['master'][0]].worker_join_command
   run_once: true
 
-- name: Configure firewalld rules for Kubernetes
-  firewalld:
-    port: "{{ item.port }}"
-    permanent: yes
-    state: enabled
-    zone: public
-  loop:
-    - { port: '6443/tcp' }       # Kubernetes API server
-    - { port: '10250/tcp' }      # Kubelet API
-    - { port: '30000-32767/tcp' } # NodePort services
-    - { port: '8472/udp' }       # Flannel/Calico VXLAN
-    - { port: '51820/udp' }      # Calico WireGuard
-    - { port: '179/tcp' }        # Calico BGP (optional)
+#- name: Configure firewalld rules for Kubernetes
+#  firewalld:
+#    port: "{{ item.port }}"
+#    permanent: yes
+#    state: enabled
+#    zone: public
+#  loop:
+#    - { port: '6443/tcp' }       # Kubernetes API server
+#    - { port: '10250/tcp' }      # Kubelet API
+#    - { port: '30000-32767/tcp' } # NodePort services
+#    - { port: '8472/udp' }       # Flannel/Calico VXLAN
+#    - { port: '51820/udp' }      # Calico WireGuard
+#    - { port: '179/tcp' }        # Calico BGP (optional)
 
 
-- name: Reload firewalld
-  service:
-    name: firewalld
-    state: reloaded
-  when: ansible_os_family == 'RedHat'
+#- name: Reload firewalld
+#  service:
+#    name: firewalld
+#    state: reloaded
+#  when: ansible_os_family == 'RedHat'
 
 - name: Check if worker node has already joined the cluster
   command: kubectl get nodes -o jsonpath='{.items[*].metadata.name}'

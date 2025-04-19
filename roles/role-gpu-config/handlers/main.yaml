@@ -1,0 +1,9 @@
+- name: rebuild-initramfs
+  command: dracut --regenerate-all --force
+- name: reboot-host
+  reboot:
+    reboot_timeout: 600
+- name: restart-containerd
+  service:
+    name: containerd
+    state: restarted

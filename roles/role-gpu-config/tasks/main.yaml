@@ -1,0 +1,156 @@
+---
+    - name: Update existing packages
+      dnf:
+        name: "*"
+        state: latest
+        exclude: "kernel*"
+      register: dnf_update
+      notify: reboot-host
+#    - name: Install current kernel headers
+#      dnf:
+#        name: "kernel-devel-{{ ansible_kernel }}"
+#        state: present
+    - name: Install EPEL repository
+      dnf:
+        name: epel-release
+        state: present
+      vars:
+        dnf_exclude: "kernel*"
+
+    - name: Download ELRepo GPG key
+      get_url:
+        url: https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+        dest: /tmp/RPM-GPG-KEY-elrepo.org
+        mode: 0644
+
+    - name: Import ELRepo GPG key
+      rpm_key:
+        key: /tmp/RPM-GPG-KEY-elrepo.org
+        state: present
+
+    - name: Verify ELRepo GPG key
+      command: rpm -qi gpg-pubkey-$(rpm -qa | grep elrepo | cut -d- -f4)
+      register: key_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Debug GPG key status
+      debug:
+        msg: "ELRepo GPG key verification failed - manual intervention required"
+      when: key_check.rc != 0
+
+#    - name: Add ELRepo repository
+#      rpm_key:
+#        key: https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+#      when: ansible_distribution_major_version == "9"
+
+    - name: Configure ELRepo
+      yum_repository:
+        name: elrepo
+        description: ELRepo repository
+        baseurl: https://elrepo.org/linux/elrepo/el9/x86_64/
+        gpgcheck: yes
+        gpgkey: file:///tmp/RPM-GPG-KEY-elrepo.org
+        enabled: yes
+    - name: Update DNF cache
+      dnf:
+        update_cache: yes
+#    - name: Install EPEL repository
+#      package:
+#        name: epel-release
+#        state: present
+
+    - name: Install development tools
+      dnf:
+        name:
+          - gcc
+          - make
+          - elfutils-libelf-devel
+          - libglvnd-glx
+          - libglvnd-opengl
+          - libglvnd-devel
+          - pkgconfig
+          - acpid
+        state: present
+#    - name: Clean DNF cache
+#      dnf:
+#        clean: all
+
+    - name: Install nvidia-detect
+      dnf:
+        name: nvidia-detect
+        state: present
+        disable_gpg_check: no  # Ensure GPG check is enforced
+        enablerepo: elrepo
+
+    - name: Detect NVIDIA driver version
+      command: nvidia-detect -v
+      register: nvidia_detect_output
+      changed_when: false
+
+    - name: Set detected driver version
+      set_fact:
+        nvidia_driver_version: "{{ nvidia_detect_output.stdout | regex_search('kmod-nvidia-([\\d\\.]+)') | first }}"
+      when: nvidia_driver_version == "latest"
+
+    - name: Blacklist Nouveau drivers (Rocky Linux recommended method)
+      copy:
+        dest: /usr/lib/modprobe.d/nvidia.conf
+        content: |
+          blacklist nouveau
+          blacklist lbm-nouveau
+          options nouveau modeset=0
+          alias nouveau off
+          alias lbm-nouveau off
+      notify: rebuild-initramfs
+
+    - name: Remove conflicting packages
+      package:
+        name:
+          - xorg-x11-drv-nouveau
+          - mesa-dri-drivers
+          - mesa-libGL
+        state: absent
+
+    - name: Install NVIDIA driver (ELRepo method)
+      package:
+        name: "kmod-nvidia-{{ nvidia_driver_version }}"
+        state: present
+      notify: rebuild-initramfs
+
+    - name: Add CUDA repository
+      dnf:
+        name: https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo
+        state: present
+
+    - name: Install CUDA toolkit
+      package:
+        name:
+          - cuda
+          - cuda-drivers
+        state: present
+
+    - name: Configure NVIDIA persistence daemon
+      systemd:
+        name: nvidia-persistenced
+        enabled: yes
+        state: started
+
+    - name: Validate NVIDIA installation
+      command: nvidia-smi
+      register: nvidia_smi_check
+      changed_when: false
+      failed_when: "nvidia_smi_check.rc != 0"
+
+    - name: Install NVIDIA container toolkit
+      package:
+        name: nvidia-container-toolkit
+        state: present
+      notify: restart-containerd
+
+    - name: Configure containerd for NVIDIA
+      command: nvidia-ctk runtime configure --runtime=containerd
+      notify: restart-containerd
+
+    # Kubernetes setup remains similar but ensure version compatibility
+    

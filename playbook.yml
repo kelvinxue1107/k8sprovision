@@ -1,12 +1,12 @@
 ---
-#- name: Configure Kubernetes Cluster on Rocky Linux 9
-#  hosts: "{{ target }}"
-#  become: true
-#  roles:
-#    - common
-#    - containerd
-#    - kubernetes
-#  tags: [never]
+- name: Configure Kubernetes Cluster on Rocky Linux 9
+  hosts: "{{ target | default('all') }}"
+  become: true
+  roles:
+    - common
+    - containerd
+    - kubernetes
+  tags: [never, common]
 
 - name: reload firewall on master
   hosts: master
@@ -35,7 +35,7 @@
   tags: [never, master-config]
 
 - name: reset Kubernetes Master Nodes
-  hosts: "{{ target_hosts }}"
+  hosts: "{{ target_hosts | default('all') }}" # Set default to 'all'
   become: yes
   vars_prompt:
     - name: target_hosts
@@ -146,3 +146,24 @@
     persistent_volume_reclaim_policy: Retain
     worker_nodes: "{{ groups['worker'] }}"
   tags: [never, worker-pvc]
+
+- name: Configure Rocky 9 as Kubernetes GPU Worker
+  hosts: k8s-s02
+  become: yes
+  vars:
+    cuda_version: "12.2.2"
+    nvidia_driver_version: "latest"
+    k8s_version: "1.29"
+    nvidia_device_plugin_version: "v0.14.5"
+  roles:
+    - role-gpu-config
+  tags: [never, worker-gpu]
+
+- name: Deploy NVIDIA Device Plugin (run on control plane)
+  hosts: localhost
+  become: no
+  tasks:
+    - name: Deploy NVIDIA device plugin
+      command: kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/{{ nvidia_device_plugin_version }}/deployments/static/nvidia-device-plugin.yml
+      when: inventory_hostname == "localhost"
+  tags: [never, worker-gpu]
