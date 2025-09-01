@@ -1,0 +1,264 @@
+---
+- name: Setup NVIDIA GPU for Kubernetes on Rocky Linux 9
+  hosts: k8s-s01
+  become: yes
+  vars:
+    nvidia_device_plugin_version: "v0.14.5"
+    containerd_config_path: "/etc/containerd/config.toml"
+    
+  tasks:
+    - name: Check if nvidia-smi is available
+      command: nvidia-smi
+      register: nvidia_smi_check
+      failed_when: false
+      changed_when: false
+
+    - name: Fail if NVIDIA drivers are not installed
+      fail:
+        msg: "NVIDIA drivers are not installed. Please install them first."
+      when: nvidia_smi_check.rc != 0
+
+    - name: Add NVIDIA Container Toolkit GPG key
+      rpm_key:
+        key: https://nvidia.github.io/libnvidia-container/gpgkey
+        state: present
+
+    - name: Add NVIDIA Container Toolkit repository
+      yum_repository:
+        name: nvidia-container-toolkit
+        description: NVIDIA Container Toolkit
+        baseurl: https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch
+        gpgcheck: yes
+        enabled: yes
+        gpgkey: https://nvidia.github.io/libnvidia-container/gpgkey
+
+    - name: Install NVIDIA Container Toolkit
+      dnf:
+        name: nvidia-container-toolkit
+        state: present
+      register: toolkit_install
+
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
+        mode: '0755'
+
+    - name: Check if containerd config exists
+      stat:
+        path: "{{ containerd_config_path }}"
+      register: containerd_config_stat
+
+    - name: Generate default containerd configuration
+      shell: containerd config default > {{ containerd_config_path }}
+      when: not containerd_config_stat.stat.exists
+
+    - name: Configure NVIDIA runtime for containerd
+      command: nvidia-ctk runtime configure --runtime=containerd --config={{ containerd_config_path }}
+      register: runtime_config
+      changed_when: "'info' in runtime_config.stderr and 'Successfully configured' in runtime_config.stderr"
+
+    - name: Restart containerd service
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+      when: runtime_config.changed or toolkit_install.changed
+
+    - name: Wait for containerd to be ready
+      wait_for:
+        port: 10010
+        host: localhost
+        timeout: 30
+      when: runtime_config.changed or toolkit_install.changed
+
+    - name: Restart kubelet service
+      systemd:
+        name: kubelet
+        state: restarted
+      when: runtime_config.changed or toolkit_install.changed
+
+    - name: Wait for kubelet to be ready
+      wait_for:
+        port: 10250
+        host: localhost
+        timeout: 60
+      when: runtime_config.changed or toolkit_install.changed
+
+- name: Deploy NVIDIA Device Plugin to Kubernetes
+  hosts: k8s-m01
+  become: yes
+  vars:
+    nvidia_device_plugin_version: "v0.14.5"
+    
+  tasks:
+    - name: Install Python pip
+      dnf:
+        name: python3-pip
+        state: present
+
+    - name: Install Kubernetes Python library
+      pip:
+        name: 
+          - kubernetes
+          - PyYAML
+        state: present
+        executable: pip3
+
+    - name: Switch to non-root user for kubectl operations
+      become: no
+      block:
+        - name: Check if NVIDIA Device Plugin is already deployed
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: DaemonSet
+            name: nvidia-device-plugin-daemonset
+            namespace: kube-system
+          register: device_plugin_check
+          failed_when: false
+
+    - name: Set device plugin deployment status
+      set_fact:
+        device_plugin_exists: "{{ device_plugin_check.resources is defined and device_plugin_check.resources | length > 0 }}"
+
+    - name: Download NVIDIA Device Plugin manifest
+      uri:
+        url: "https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/{{ nvidia_device_plugin_version }}/nvidia-device-plugin.yml"
+        method: GET
+        return_content: yes
+      register: device_plugin_manifest
+      when: not device_plugin_exists
+
+    - name: Apply NVIDIA Device Plugin
+      kubernetes.core.k8s:
+        definition: "{{ device_plugin_manifest.content | from_yaml_all | list }}"
+        state: present
+      when: not device_plugin_exists
+
+    - name: Wait for NVIDIA Device Plugin to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: nvidia-device-plugin-daemonset
+        namespace: kube-system
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "True"
+        wait_timeout: 300
+      when: not device_plugin_exists
+
+- name: Verify GPU availability and label nodes
+  hosts: k8s-m01
+  become: no
+  vars:
+    gpu_label: "accelerator=nvidia-gpu"
+    
+  tasks:
+    - name: Get node information
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: nodes_info
+
+    - name: Check for GPU capacity on nodes
+      set_fact:
+        gpu_nodes: "{{ gpu_nodes | default([]) + [item.metadata.name] }}"
+      loop: "{{ nodes_info.resources | default([]) }}"
+      when: 
+        - nodes_info.resources is defined
+        - item.status.capacity is defined
+        - "'nvidia.com/gpu' in item.status.capacity"
+        - item.status.capacity['nvidia.com/gpu'] | int > 0
+
+    - name: Display GPU nodes found
+      debug:
+        msg: "GPU nodes detected: {{ gpu_nodes | default([]) }}"
+
+    - name: Label GPU nodes
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ item }}"
+            labels:
+              accelerator: "nvidia-gpu"
+      loop: "{{ gpu_nodes | default([]) }}"
+      when: gpu_nodes is defined
+
+    - name: Create GPU test pod
+      kubernetes.core.k8s:
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: gpu-test-pod
+            namespace: default
+          spec:
+            runtimeClassName: nvidia
+            containers:
+            - name: gpu-container
+              image: nvidia/cuda:11.8-runtime-ubuntu20.04
+              command: ["nvidia-smi"]
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+            restartPolicy: Never
+        state: present
+      register: test_pod_created
+
+    - name: Wait for test pod to complete
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: gpu-test-pod
+        namespace: default
+        wait: true
+        wait_condition:
+          type: Ready
+          status: "False"
+        wait_timeout: 120
+      when: test_pod_created.changed
+
+    - name: Get test pod logs
+      kubernetes.core.k8s_log:
+        api_version: v1
+        kind: Pod
+        name: gpu-test-pod
+        namespace: default
+      register: test_pod_logs
+      when: test_pod_created.changed
+
+    - name: Display test results
+      debug:
+        msg: "GPU test pod output: {{ test_pod_logs.log }}"
+      when: test_pod_created.changed and test_pod_logs.log is defined
+
+    - name: Clean up test pod
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        name: gpu-test-pod
+        namespace: default
+        state: absent
+      when: test_pod_created.changed
+
+    - name: Final verification - show GPU resources
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: final_nodes
+      
+    - name: Display GPU capacity summary
+      debug:
+        msg: |
+          Node: {{ item.metadata.name }}
+          GPU Capacity: {{ item.status.capacity.get('nvidia.com/gpu', 'Not available') }}
+          GPU Allocatable: {{ item.status.allocatable.get('nvidia.com/gpu', 'Not available') }}
+      loop: "{{ final_nodes.resources | default([]) }}"
+      when: 
+        - final_nodes.resources is defined
+        - item.status.capacity is defined
+        - "'nvidia.com/gpu' in item.status.capacity"

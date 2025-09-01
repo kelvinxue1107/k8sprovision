@@ -146,3 +146,13 @@
     persistent_volume_reclaim_policy: Retain
     worker_nodes: "{{ groups['worker'] }}"
   tags: [never, worker-pvc]
+
+- name: Setup NVIDIA GPU for Kubernetes on Rocky Linux 9
+  hosts: k8s-s01
+  become: yes
+  roles:
+    - role-gpu-node-cuda
+  tags: [never, gpu-node-cuda]
+  vars:
+    nvidia_device_plugin_version: "v0.14.5"
+    containerd_config_path: "/etc/containerd/config.toml"
